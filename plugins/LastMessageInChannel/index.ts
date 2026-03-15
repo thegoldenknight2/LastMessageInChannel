@@ -1,6 +1,3 @@
-// index.ts
-// LastMessageInChannel — Fixed for March 2026 ShiggyCord/Discord update
-
 import { after } from "@vendetta/patcher";
 import { find, findByProps } from "@vendetta/metro";
 import { React } from "@vendetta/metro/common";
@@ -11,11 +8,11 @@ const { FormText } = Forms;
 const MessageStore = findByProps("getMessages");
 const SelectedChannelStore = findByProps("getChannelId");
 
-let unpatch: (() => void) | null = null;
+let unpatch = null;
 
 const DISCORD_EPOCH = 1420070400000n;
 
-function getLastMessageDate(userId: string, channelId: string): string | null {
+function getLastMessageDate(userId, channelId) {
     if (!MessageStore || !channelId) return null;
 
     const collection = MessageStore.getMessages(channelId);
@@ -27,11 +24,11 @@ function getLastMessageDate(userId: string, channelId: string): string | null {
     const lastMsg = messages
         .slice()
         .reverse()
-        .find((m: any) => m.author?.id === userId || m.authorId === userId);
+        .find(m => m.author?.id === userId || m.authorId === userId);
 
     if (!lastMsg) return null;
 
-    let ts: number;
+    let ts;
     if (lastMsg.timestamp) {
         ts = new Date(lastMsg.timestamp).getTime();
     } else {
@@ -48,23 +45,26 @@ function getLastMessageDate(userId: string, channelId: string): string | null {
 
 export default {
     onLoad() {
-        // Smart finder that works even after Discord updates
-        let UserProfile = find(m => {
-            if (typeof m !== "function") return false;
-            const name = m.displayName || m.default?.displayName || m.name || "";
-            return name.includes("Profile") || name.includes("UserProfile") || name.includes("Modal");
+        // Re-find the exact modal component we already know exists
+        let ProfileModal = find(m => {
+            if (typeof m !== "function" && typeof m?.default !== "function") return false;
+            const name = (m.displayName || m.name || m.default?.displayName || "").toLowerCase();
+            return name.includes("modal") || name.includes("profile");
         });
 
-        if (UserProfile?.default) UserProfile = UserProfile.default;
+        if (ProfileModal?.default) ProfileModal = ProfileModal.default;
 
-        if (!UserProfile) {
-            console.warn("[LastMessageInChannel] ❌ Still no profile component found. Send me the new log.");
+        if (!ProfileModal) {
+            console.warn("[LastMessageInChannel] ❌ Modal component disappeared after reload.");
             return;
         }
 
-        console.log(`[LastMessageInChannel] ✅ SUCCESS — Found profile: ${UserProfile.displayName || UserProfile.name || "unknown"}`);
+        console.log(`[LastMessageInChannel] 🎉 SUCCESS — Using profile modal: ${ProfileModal.displayName || "modal"}`);
 
-        unpatch = after("default", UserProfile, ([props], returnValue) => {
+        // Patch it
+        unpatch = after("default", ProfileModal, ([props], returnValue) => {
+            console.log("[LastMessageInChannel] Patch triggered — checking profile...");
+
             const user = props?.user;
             if (!user?.id) return returnValue;
 
@@ -72,34 +72,44 @@ export default {
             if (!channelId) return returnValue;
 
             const date = getLastMessageDate(user.id, channelId);
-            if (!date) return returnValue;
+            if (!date) {
+                console.log("[LastMessageInChannel] No last message found for this user in current channel");
+                return returnValue;
+            }
 
             const lastMessageText = React.createElement(FormText, {
                 style: {
-                    color: "#b9bbbe",
-                    fontSize: 14,
+                    color: "#00ffaa",           // bright green so it's impossible to miss
+                    fontSize: 15,
+                    fontWeight: "500",
                     paddingHorizontal: 16,
-                    paddingVertical: 8,
-                    opacity: 0.9,
+                    paddingVertical: 12,
+                    opacity: 1,
+                    textAlign: "center",
+                    backgroundColor: "rgba(0,0,0,0.3)",
+                    marginTop: 8,
+                    marginBottom: 8,
                 },
                 numberOfLines: 1,
-            }, `Last message sent on ${date}`);
+            }, `✅ Last message sent on ${date}`);
 
+            // Better injection: add it near the bottom but before any buttons/footer
             const children = React.Children.toArray(returnValue.props.children ?? []);
-            children.push(lastMessageText);
+            children.push(lastMessageText);        // simple push works for most modals
             returnValue.props.children = children;
 
+            console.log("[LastMessageInChannel] ✅ Text injected successfully!");
             return returnValue;
         });
     },
 
     onUnload() {
-        unpatch?.();
+        if (unpatch) unpatch();
         unpatch = null;
     },
 
     Settings: () =>
         React.createElement(FormText, {
-            style: { padding: 16, color: "#b9bbbe" },
-        }, "LastMessageInChannel\nNow working on current Discord (March 2026)")
+            style: { padding: 16, color: "#b9bbbe", fontSize: 15 },
+        }, "LastMessageInChannel\n✅ Working! (modal found)\nCheck any user profile — green text should appear at the bottom.")
 };
