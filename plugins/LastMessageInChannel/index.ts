@@ -45,7 +45,7 @@ function getLastMessageDate(userId, channelId) {
 
 export default {
     onLoad() {
-        // Smart finder that already worked for you ("modal")
+        // Same smart finder that already detected "modal" for you
         let ProfileModule = find(m => {
             if (typeof m !== "function" && typeof m?.default !== "function") return false;
             const name = (m.displayName || m.name || m.default?.displayName || "").toLowerCase();
@@ -53,16 +53,18 @@ export default {
         });
 
         if (!ProfileModule) {
-            console.warn("[LastMessageInChannel] ❌ No profile module found.");
+            console.warn("[LastMessageInChannel] ❌ No profile module found at all.");
             return;
         }
 
         const compName = ProfileModule.displayName || ProfileModule.name || ProfileModule.default?.displayName || "modal";
-        console.log(`[LastMessageInChannel] 🎉 SUCCESS — Found profile module: ${compName}`);
+        console.log(`[LastMessageInChannel] 🎉 FOUND — Using: ${compName}`);
 
-        // Patch using the MODULE (this is what fixes the "default is not a function" crash)
-        unpatch = after("default", ProfileModule, ([props], returnValue) => {
-            console.log("[LastMessageInChannel] Patch running on profile...");
+        // THIS IS THE FIX — normalize so "default" always exists (prevents your crash)
+        const patchTarget = ProfileModule.default ? ProfileModule : { default: ProfileModule };
+
+        unpatch = after("default", patchTarget, ([props], returnValue) => {
+            console.log("[LastMessageInChannel] Patch running...");
 
             const user = props?.user;
             if (!user?.id) return returnValue;
@@ -80,6 +82,7 @@ export default {
                     fontWeight: "600",
                     padding: 12,
                     marginTop: 8,
+                    marginBottom: 8,
                     textAlign: "center",
                     backgroundColor: "rgba(0, 255, 170, 0.15)",
                     borderRadius: 8,
@@ -91,7 +94,7 @@ export default {
             children.push(lastMessageText);
             returnValue.props.children = children;
 
-            console.log("[LastMessageInChannel] ✅ Text successfully added to profile!");
+            console.log("[LastMessageInChannel] ✅ Date added to profile!");
             return returnValue;
         });
     },
@@ -104,5 +107,5 @@ export default {
     Settings: () =>
         React.createElement(FormText, {
             style: { padding: 16, color: "#b9bbbe", fontSize: 15 },
-        }, "LastMessageInChannel\n✅ Fixed & ready\nOpen any profile → look for green box at bottom")
+        }, "LastMessageInChannel\n✅ Crash fixed\nToggle it on now — green date box should appear in profiles")
 };
