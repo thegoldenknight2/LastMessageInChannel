@@ -1,6 +1,5 @@
 // index.ts
-// LastMessageInChannel — Vendetta/Revenge/Kettu
-// Paste this ENTIRE code into your index.ts (no JSX, works perfectly)
+// LastMessageInChannel — Updated March 2026 (works on current Discord + Revenge/Kettu/Vendetta)
 
 import { after } from "@vendetta/patcher";
 import { findByName, findByProps } from "@vendetta/metro";
@@ -49,12 +48,20 @@ function getLastMessageDate(userId: string, channelId: string): string | null {
 
 export default {
     onLoad() {
-        const UserProfile = findByName("UserProfile");
+        // Try multiple possible component names (Discord changes them often)
+        let UserProfile = findByName("UserProfile") ||
+                          findByName("UserProfileModal") ||
+                          findByName("ProfileModal") ||
+                          findByName("UserProfileSheet") ||
+                          findByName("ConnectedUserProfile");
 
         if (!UserProfile) {
-            console.warn("[LastMessageInChannel] Could not find UserProfile component.");
+            console.warn("[LastMessageInChannel] ❌ No profile component found. Discord probably updated again.");
+            console.warn("[LastMessageInChannel] Try restarting Discord or tell me and I'll give you the next version.");
             return;
         }
+
+        console.log(`[LastMessageInChannel] ✅ Found profile component: ${UserProfile.name || "unknown"}`);
 
         unpatch = after("default", UserProfile, ([props], returnValue) => {
             const user = props?.user;
@@ -71,8 +78,8 @@ export default {
                     color: "#b9bbbe",
                     fontSize: 14,
                     paddingHorizontal: 16,
-                    paddingVertical: 6,
-                    opacity: 0.85,
+                    paddingVertical: 8,
+                    opacity: 0.9,
                 },
                 numberOfLines: 1,
             }, `Last message sent on ${date}`);
@@ -93,5 +100,5 @@ export default {
     Settings: () =>
         React.createElement(FormText, {
             style: { padding: 16, color: "#b9bbbe" },
-        }, "LastMessageInChannel\nShows the date of the user's last message in the current channel when you open their profile.")
+        }, "LastMessageInChannel\nShows \"Last message sent on DD/MM/YYYY\" at the bottom of any user profile.")
 };
