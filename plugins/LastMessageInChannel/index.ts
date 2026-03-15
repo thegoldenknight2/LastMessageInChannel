@@ -12,3 +12,7 @@ after("default", BioText, ([props], res) => {
   console.log("[LastMsg] all props values:", JSON.stringify(props));
   return res;
 });
+
+export const onUnload = () => {
+  unpatchAll();
+};
