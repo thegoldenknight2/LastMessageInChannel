@@ -1,10 +1,10 @@
 {
-    "name": "Template Plugin",
-    "description": "A plugin for use as a template.",
+    "name": "LastMessageInChannel",
+    "description": "a plugin that shows the date of the last message a user sent in the channel you open their profile in",
     "authors": [
         {
-            "name": "You!",
-            "id": "YOUR_ID_HERE"
+            "name": "zgoldenknight",
+            "id": "1337477888139726889"
         }
     ],
     "main": "src/index.ts",
