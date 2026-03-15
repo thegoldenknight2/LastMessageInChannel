@@ -45,25 +45,24 @@ function getLastMessageDate(userId, channelId) {
 
 export default {
     onLoad() {
-        // Re-find the exact modal component we already know exists
-        let ProfileModal = find(m => {
+        // Smart finder that already worked for you ("modal")
+        let ProfileModule = find(m => {
             if (typeof m !== "function" && typeof m?.default !== "function") return false;
             const name = (m.displayName || m.name || m.default?.displayName || "").toLowerCase();
             return name.includes("modal") || name.includes("profile");
         });
 
-        if (ProfileModal?.default) ProfileModal = ProfileModal.default;
-
-        if (!ProfileModal) {
-            console.warn("[LastMessageInChannel] ❌ Modal component disappeared after reload.");
+        if (!ProfileModule) {
+            console.warn("[LastMessageInChannel] ❌ No profile module found.");
             return;
         }
 
-        console.log(`[LastMessageInChannel] 🎉 SUCCESS — Using profile modal: ${ProfileModal.displayName || "modal"}`);
+        const compName = ProfileModule.displayName || ProfileModule.name || ProfileModule.default?.displayName || "modal";
+        console.log(`[LastMessageInChannel] 🎉 SUCCESS — Found profile module: ${compName}`);
 
-        // Patch it
-        unpatch = after("default", ProfileModal, ([props], returnValue) => {
-            console.log("[LastMessageInChannel] Patch triggered — checking profile...");
+        // Patch using the MODULE (this is what fixes the "default is not a function" crash)
+        unpatch = after("default", ProfileModule, ([props], returnValue) => {
+            console.log("[LastMessageInChannel] Patch running on profile...");
 
             const user = props?.user;
             if (!user?.id) return returnValue;
@@ -72,33 +71,27 @@ export default {
             if (!channelId) return returnValue;
 
             const date = getLastMessageDate(user.id, channelId);
-            if (!date) {
-                console.log("[LastMessageInChannel] No last message found for this user in current channel");
-                return returnValue;
-            }
+            if (!date) return returnValue;
 
             const lastMessageText = React.createElement(FormText, {
                 style: {
-                    color: "#00ffaa",           // bright green so it's impossible to miss
+                    color: "#00ffaa",
                     fontSize: 15,
-                    fontWeight: "500",
-                    paddingHorizontal: 16,
-                    paddingVertical: 12,
-                    opacity: 1,
-                    textAlign: "center",
-                    backgroundColor: "rgba(0,0,0,0.3)",
+                    fontWeight: "600",
+                    padding: 12,
                     marginTop: 8,
-                    marginBottom: 8,
+                    textAlign: "center",
+                    backgroundColor: "rgba(0, 255, 170, 0.15)",
+                    borderRadius: 8,
                 },
                 numberOfLines: 1,
             }, `✅ Last message sent on ${date}`);
 
-            // Better injection: add it near the bottom but before any buttons/footer
             const children = React.Children.toArray(returnValue.props.children ?? []);
-            children.push(lastMessageText);        // simple push works for most modals
+            children.push(lastMessageText);
             returnValue.props.children = children;
 
-            console.log("[LastMessageInChannel] ✅ Text injected successfully!");
+            console.log("[LastMessageInChannel] ✅ Text successfully added to profile!");
             return returnValue;
         });
     },
@@ -111,5 +104,5 @@ export default {
     Settings: () =>
         React.createElement(FormText, {
             style: { padding: 16, color: "#b9bbbe", fontSize: 15 },
-        }, "LastMessageInChannel\n✅ Working! (modal found)\nCheck any user profile — green text should appear at the bottom.")
+        }, "LastMessageInChannel\n✅ Fixed & ready\nOpen any profile → look for green box at bottom")
 };
