@@ -13,20 +13,20 @@ let unpatch = null;
 const DISCORD_EPOCH = 1420070400000n;
 
 function getLastMessageDate(userId, channelId) {
-    if (!MessageStore || !channelId) return null;
+    if (!MessageStore || !channelId) return "Unknown (no store)";
 
     const collection = MessageStore.getMessages(channelId);
-    if (!collection) return null;
+    if (!collection) return "Unknown (no messages)";
 
     const messages = collection._array ?? collection.toArray?.() ?? [];
-    if (messages.length === 0) return null;
+    if (messages.length === 0) return "Unknown (empty channel)";
 
     const lastMsg = messages
         .slice()
         .reverse()
         .find(m => m.author?.id === userId || m.authorId === userId);
 
-    if (!lastMsg) return null;
+    if (!lastMsg) return "Unknown (no message from user)";
 
     let ts;
     if (lastMsg.timestamp) {
@@ -45,7 +45,6 @@ function getLastMessageDate(userId, channelId) {
 
 export default {
     onLoad() {
-        // Same smart finder that already detected "modal" for you
         let ProfileModule = find(m => {
             if (typeof m !== "function" && typeof m?.default !== "function") return false;
             const name = (m.displayName || m.name || m.default?.displayName || "").toLowerCase();
@@ -53,48 +52,53 @@ export default {
         });
 
         if (!ProfileModule) {
-            console.warn("[LastMessageInChannel] ❌ No profile module found at all.");
+            console.warn("[LastMessageInChannel] ❌ No profile module found.");
             return;
         }
 
         const compName = ProfileModule.displayName || ProfileModule.name || ProfileModule.default?.displayName || "modal";
-        console.log(`[LastMessageInChannel] 🎉 FOUND — Using: ${compName}`);
+        console.log(`[LastMessageInChannel] 🎉 FOUND MODULE: ${compName}`);
 
-        // THIS IS THE FIX — normalize so "default" always exists (prevents your crash)
         const patchTarget = ProfileModule.default ? ProfileModule : { default: ProfileModule };
 
         unpatch = after("default", patchTarget, ([props], returnValue) => {
-            console.log("[LastMessageInChannel] Patch running...");
+            console.log("[LastMessageInChannel] 🔥 PATCH TRIGGERED");
 
             const user = props?.user;
-            if (!user?.id) return returnValue;
+            if (!user?.id) {
+                console.log("[LastMessageInChannel] No user in props");
+                return returnValue;
+            }
 
             const channelId = SelectedChannelStore?.getChannelId?.();
-            if (!channelId) return returnValue;
+            console.log(`[LastMessageInChannel] Current channel: ${channelId || "none"}`);
 
             const date = getLastMessageDate(user.id, channelId);
-            if (!date) return returnValue;
 
-            const lastMessageText = React.createElement(FormText, {
+            const displayText = `Last message sent on ${date}`;
+
+            const testText = React.createElement(FormText, {
                 style: {
-                    color: "#00ffaa",
-                    fontSize: 15,
-                    fontWeight: "600",
-                    padding: 12,
-                    marginTop: 8,
-                    marginBottom: 8,
+                    color: "#ff0000",                    // bright red
+                    fontSize: 16,
+                    fontWeight: "700",
+                    padding: 14,
+                    marginTop: 12,
+                    marginBottom: 12,
                     textAlign: "center",
-                    backgroundColor: "rgba(0, 255, 170, 0.15)",
-                    borderRadius: 8,
+                    backgroundColor: "#ff000030",       // red background
+                    borderRadius: 12,
+                    borderWidth: 2,
+                    borderColor: "#ff0000",
                 },
                 numberOfLines: 1,
-            }, `✅ Last message sent on ${date}`);
+            }, `🧪 ${displayText}`);
 
             const children = React.Children.toArray(returnValue.props.children ?? []);
-            children.push(lastMessageText);
+            children.push(testText);
             returnValue.props.children = children;
 
-            console.log("[LastMessageInChannel] ✅ Date added to profile!");
+            console.log(`[LastMessageInChannel] ✅ TEXT INJECTED: ${displayText}`);
             return returnValue;
         });
     },
@@ -107,5 +111,5 @@ export default {
     Settings: () =>
         React.createElement(FormText, {
             style: { padding: 16, color: "#b9bbbe", fontSize: 15 },
-        }, "LastMessageInChannel\n✅ Crash fixed\nToggle it on now — green date box should appear in profiles")
+        }, "LastMessageInChannel — TEST MODE\nOpen any profile now.\nYou MUST see a big red box at the bottom.")
 };
