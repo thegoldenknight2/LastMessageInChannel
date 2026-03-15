@@ -1,16 +1,14 @@
 import { findByProps } from "@vendetta/metro";
-import { instead, after } from "@vendetta/patcher";
+import { after } from "@vendetta/patcher";
 import { React } from "@vendetta/metro/common";
 
-const { View, Text } = findByProps("View", "Text") ?? require("react-native");
-const UserStore = findByProps("getUser", "getCurrentUser");
-const ChannelStore = findByProps("getChannel", "getDMFromUserId");
+const { View, Text } = findByProps("Text", "View");
 const SelectedChannelStore = findByProps("getChannelId", "getVoiceChannelId");
 const RestAPI = findByProps("getAPIBaseURL", "get", "post");
 
-const cache = {};
+const cache: Record<string, string> = {};
 
-async function fetchLastMessage(userId, channelId) {
+async function fetchLastMessage(userId: string, channelId: string): Promise<string | null> {
   const key = `${userId}:${channelId}`;
   if (cache[key]) return cache[key];
 
@@ -19,8 +17,7 @@ async function fetchLastMessage(userId, channelId) {
       url: `/channels/${channelId}/messages/search?author_id=${userId}&limit=1`,
     });
 
-    const messages = res?.body?.messages?.[0];
-    const lastMsg = messages?.[0];
+    const lastMsg = res?.body?.messages?.[0]?.[0];
 
     if (lastMsg) {
       const date = new Date(lastMsg.timestamp);
@@ -37,50 +34,51 @@ async function fetchLastMessage(userId, channelId) {
   }
 }
 
-let unpatch;
+function LastMessageLabel({ userId, channelId }: { userId: string; channelId: string }) {
+  const [lastSeen, setLastSeen] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    fetchLastMessage(userId, channelId).then((date) => {
+      if (date) setLastSeen(date);
+    });
+  }, [userId, channelId]);
+
+  if (!lastSeen) return null;
+
+  return React.createElement(
+    View,
+    { style: { paddingHorizontal: 16, paddingTop: 8 } },
+    React.createElement(
+      Text,
+      {
+        style: {
+          color: "#b5bac1",
+          fontSize: 12,
+          fontWeight: "600",
+          textTransform: "uppercase",
+          letterSpacing: 0.5,
+        },
+      },
+      `Last message in channel: ${lastSeen}`
+    )
+  );
+}
+
+let unpatch: (() => void) | undefined;
 
 export default {
   onLoad() {
-    const UserProfileSection = findByProps("PRIMARY_INFO", "UserProfileSections");
-    const UserPopout = findByProps("UserPopoutContainer") 
-      ?? findByProps("renderHeader", "renderBio");
+    const UserPopout =
+      findByProps("UserPopoutContainer") ?? findByProps("renderHeader", "renderBio");
 
-    // We patch the user popout component
     unpatch = after("default", UserPopout, (args, res) => {
       const userId = args?.[0]?.user?.id ?? args?.[0]?.userId;
       const channelId = SelectedChannelStore.getChannelId();
 
-      if (!userId || !channelId) return res;
+      if (!userId || !channelId || !res?.props) return res;
 
-      const [lastSeen, setLastSeen] = React.useState(null);
+      const label = React.createElement(LastMessageLabel, { userId, channelId });
 
-      React.useEffect(() => {
-        fetchLastMessage(userId, channelId).then((date) => {
-          if (date) setLastSeen(date);
-        });
-      }, [userId, channelId]);
-
-      if (!lastSeen || !res?.props?.children) return res;
-
-      const label = React.createElement(
-        View,
-        { style: { paddingHorizontal: 16, paddingTop: 8 } },
-        React.createElement(
-          Text,
-          {
-            style: {
-              color: "#b5bac1",
-              fontSize: 12,
-              fontWeight: "600",
-              textTransform: "uppercase",
-              letterSpacing: 0.5,
-            },
-          },
-          `Last message in channel: ${lastSeen}`
-        )
-      );
-
-      // Inject into the popout's children
       if (Array.isArray(res.props.children)) {
         res.props.children.push(label);
       } else {
