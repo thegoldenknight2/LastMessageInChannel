@@ -1,37 +1,21 @@
-name: Build and Deploy Plugin
+name: Build
 on:
   push:
-    branches: [ master, main ] # Works regardless of your branch name
-
+    branches: [ master, main ]
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v2
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v2
         with:
-          version: 8
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
+          version: 9
+      - uses: actions/setup-node@v4
         with:
-          node-version: 20
-          # We removed the cache line to prevent the "pnpm-lock.yaml not found" error
-
-      - name: Install Dependencies
-        run: pnpm install --no-frozen-lockfile
-
-      - name: Build Plugin
-        # This tells the script to look into your new folder name
-        run: pnpm build LastMessageInChannel
-
-      - name: Deploy to GitHub Pages
-        uses: JamesIves/github-pages-deploy-action@v4
+          node-version: 24
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm build LastMessageInChannel
+      - uses: JamesIves/github-pages-deploy-action@v4
         with:
           folder: dist
           branch: gh-pages
-          
-      
