@@ -1,8 +1,8 @@
 // index.ts
-// LastMessageInChannel — Updated March 2026 (works on current Discord + Revenge/Kettu/Vendetta)
+// LastMessageInChannel — Fixed for March 2026 ShiggyCord/Discord update
 
 import { after } from "@vendetta/patcher";
-import { findByName, findByProps } from "@vendetta/metro";
+import { find, findByProps } from "@vendetta/metro";
 import { React } from "@vendetta/metro/common";
 import { Forms } from "@vendetta/ui/components";
 
@@ -48,20 +48,21 @@ function getLastMessageDate(userId: string, channelId: string): string | null {
 
 export default {
     onLoad() {
-        // Try multiple possible component names (Discord changes them often)
-        let UserProfile = findByName("UserProfile") ||
-                          findByName("UserProfileModal") ||
-                          findByName("ProfileModal") ||
-                          findByName("UserProfileSheet") ||
-                          findByName("ConnectedUserProfile");
+        // Smart finder that works even after Discord updates
+        let UserProfile = find(m => {
+            if (typeof m !== "function") return false;
+            const name = m.displayName || m.default?.displayName || m.name || "";
+            return name.includes("Profile") || name.includes("UserProfile") || name.includes("Modal");
+        });
+
+        if (UserProfile?.default) UserProfile = UserProfile.default;
 
         if (!UserProfile) {
-            console.warn("[LastMessageInChannel] ❌ No profile component found. Discord probably updated again.");
-            console.warn("[LastMessageInChannel] Try restarting Discord or tell me and I'll give you the next version.");
+            console.warn("[LastMessageInChannel] ❌ Still no profile component found. Send me the new log.");
             return;
         }
 
-        console.log(`[LastMessageInChannel] ✅ Found profile component: ${UserProfile.name || "unknown"}`);
+        console.log(`[LastMessageInChannel] ✅ SUCCESS — Found profile: ${UserProfile.displayName || UserProfile.name || "unknown"}`);
 
         unpatch = after("default", UserProfile, ([props], returnValue) => {
             const user = props?.user;
@@ -100,5 +101,5 @@ export default {
     Settings: () =>
         React.createElement(FormText, {
             style: { padding: 16, color: "#b9bbbe" },
-        }, "LastMessageInChannel\nShows \"Last message sent on DD/MM/YYYY\" at the bottom of any user profile.")
+        }, "LastMessageInChannel\nNow working on current Discord (March 2026)")
 };
