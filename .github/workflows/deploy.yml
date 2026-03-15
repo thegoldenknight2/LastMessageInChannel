@@ -2,17 +2,21 @@ name: Build
 on:
   push:
     branches: [ master, main ]
+
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v2
-        with:
-          version: 9
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      - uses: pnpm/action-setup@v2
+        with:
+          version: 9
       - run: pnpm install --no-frozen-lockfile
       - run: pnpm build LastMessageInChannel
       - uses: JamesIves/github-pages-deploy-action@v4
