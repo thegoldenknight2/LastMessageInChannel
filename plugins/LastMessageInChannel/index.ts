@@ -1,4 +1,4 @@
-import { find, findByProps, findByTypeName } from "@vendetta/metro";
+import { find, findByProps } from "@vendetta/metro";
 import { React } from "@vendetta/metro/common";
 import { before, after } from "@vendetta/patcher";
 import { getAssetIDByName } from "@vendetta/ui/assets";
@@ -6,71 +6,112 @@ import { Forms } from "@vendetta/ui/components";
 
 const { FormRow } = Forms;
 
-// Find required Discord stores
+// Stores
 const ChannelStore = findByProps("getChannel", "getChannels");
 const MessageStore = findByProps("getMessages", "getMessage");
 const GuildStore = findByProps("getGuild", "getGuilds");
 
-// Try to find the user profile component - it may be named differently
-let UserProfileComponent = findByTypeName("UserProfile") || 
-                          findByTypeName("UserProfileScreen") || 
-                          find(m => m?.type?.render?.name === "UserProfileHeader") ||
-                          find(m => m?.default?.render?.name === "UserProfileHeader");
+// Attempt to find the user profile component
+let UserProfileComponent;
 
-// If still not found, try a more generic approach: look for a component that renders user info
-if (!UserProfileComponent) {
-    // Look for a component that likely contains the user profile (has userId prop)
-    UserProfileComponent = find(m => m?.render && m?.defaultProps?.userId !== undefined);
+// Strategy 1: Look for components with typical profile names
+const possibleNames = [
+    "UserProfile",
+    "UserProfileScreen",
+    "UserProfileHeader",
+    "UserProfileModal",
+    "ProfilePanel"
+];
+
+for (const name of possibleNames) {
+    UserProfileComponent = find(m => m?.name === name || m?.displayName === name);
+    if (UserProfileComponent) break;
 }
 
-// Fallback: patch the entire profile modal if necessary
+// Strategy 2: Look for a component that has a userId prop in defaultProps
 if (!UserProfileComponent) {
-    console.error("[UserDetails] Could not find UserProfile component. Plugin will not work.");
+    UserProfileComponent = find(m => m?.defaultProps?.userId !== undefined);
+}
+
+// Strategy 3: Look for a component that takes userId as a prop in its render
+if (!UserProfileComponent) {
+    UserProfileComponent = find(m => {
+        if (!m?.render) return false;
+        // Check if the render function's source contains 'userId' (crude but sometimes works)
+        const renderStr = m.render.toString();
+        return renderStr.includes('userId') && renderStr.includes('guildId');
+    });
+}
+
+// If still not found, log a warning
+if (!UserProfileComponent) {
+    console.warn("[UserDetails] Could not find UserProfile component. Plugin will not work.");
+} else {
+    console.log("[UserDetails] Found profile component:", UserProfileComponent.name || UserProfileComponent.displayName);
 }
 
 let patches = [];
 
 export default {
     onLoad: () => {
-        if (!UserProfileComponent) return;
+        if (!UserProfileComponent) {
+            console.log("[UserDetails] No profile component found, skipping patches.");
+            return;
+        }
 
+        // Patch before render to capture userId and guildId and find last message
         patches.push(
             before("render", UserProfileComponent, (args) => {
-                const props = args[0];
-                const userId = props.userId;
-                const guildId = props.guildId;
+                try {
+                    const props = args[0];
+                    const userId = props?.userId;
+                    const guildId = props?.guildId;
 
-                if (!userId || !guildId) return;
+                    if (!userId || !guildId) return;
 
-                const lastMessage = getLatestUserMessageInGuild(userId, guildId);
-                if (lastMessage) {
-                    props.__lastMessageTimestamp = lastMessage.timestamp;
+                    const lastMessage = getLatestUserMessageInGuild(userId, guildId);
+                    if (lastMessage) {
+                        props.__lastMessageTimestamp = lastMessage.timestamp;
+                        console.log(`[UserDetails] Found last message for user ${userId} at ${lastMessage.timestamp}`);
+                    }
+                } catch (e) {
+                    console.error("[UserDetails] Error in before patch:", e);
                 }
             })
         );
 
+        // Patch after render to inject the row
         patches.push(
             after("render", UserProfileComponent, (_, ret) => {
-                const props = ret?.props;
-                if (!props?.__lastMessageTimestamp) return ret;
+                try {
+                    const props = ret?.props;
+                    if (!props?.__lastMessageTimestamp) return ret;
 
-                // Find the section where we want to insert our row
-                const infoSection = findInTree(ret, n => 
-                    n?.type?.name === "UserProfileInfo" || 
-                    n?.type?.displayName === "UserProfileInfo"
-                );
+                    // Find the info section where we can insert our row
+                    const infoSection = findInTree(ret, n => 
+                        n?.type?.name === "UserProfileInfo" || 
+                        n?.type?.displayName === "UserProfileInfo" ||
+                        (n?.type?.toString && n.type.toString().includes("UserProfileInfo"))
+                    );
 
-                if (!infoSection || !infoSection.props?.children) return ret;
+                    if (!infoSection || !infoSection.props?.children) {
+                        console.log("[UserDetails] Could not find UserProfileInfo section");
+                        return ret;
+                    }
 
-                // Insert our row
-                infoSection.props.children.push(
-                    React.createElement(FormRow, {
-                        label: "Last Message",
-                        subLabel: formatTimestamp(props.__lastMessageTimestamp),
-                        icon: getAssetIDByName("ic_message_24px"),
-                    })
-                );
+                    // Insert the row
+                    infoSection.props.children.push(
+                        React.createElement(FormRow, {
+                            label: "Last Message",
+                            subLabel: formatTimestamp(props.__lastMessageTimestamp),
+                            icon: getAssetIDByName("ic_message_24px"),
+                        })
+                    );
 
+                    console.log("[UserDetails] Injected last message row");
+                } catch (e) {
+                    console.error("[UserDetails] Error in after patch:", e);
+                }
                 return ret;
             })
         );
@@ -80,6 +121,7 @@ export default {
     onUnload: () => {
         patches.forEach(p => p());
         patches = [];
+        console.log("[UserDetails] Plugin unloaded.");
     },
 };
 
@@ -94,8 +136,10 @@ function getLatestUserMessageInGuild(userId, guildId) {
     const channels = Object.values(guild.channels || {});
 
     for (const channel of channels) {
-        const messages = MessageStore.getMessages(channel.id)?.toArray?.() || [];
-        for (const msg of messages) {
+        const messages = MessageStore.getMessages(channel.id);
+        // messages might be a collection, convert to array
+        const messagesArray = messages?.toArray?.() || [];
+        for (const msg of messagesArray) {
             if (msg.author?.id === userId) {
                 const ts = new Date(msg.timestamp);
                 if (!latest || ts > new Date(latest.timestamp)) {
@@ -141,4 +185,4 @@ function findInTree(tree, filter) {
     }
 
     return null;
-                                               }
+                      }
