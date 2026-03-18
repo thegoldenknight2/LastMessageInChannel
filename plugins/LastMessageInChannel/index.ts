@@ -1,114 +1,121 @@
-import { after } from "@vendetta/patcher";
-import { find, findByName, findByProps } from "@vendetta/metro";
+import { find } from "@vendetta/metro";
 import { React } from "@vendetta/metro/common";
+import { before } from "@vendetta/patcher";
+import { getAssetIDByName } from "@vendetta/ui/assets";
 import { Forms } from "@vendetta/ui/components";
 
-const { FormText } = Forms;
+const { FormRow } = Forms;
 
-const MessageStore = findByProps("getMessages");
-const SelectedChannelStore = findByProps("getChannelId");
+// Find required Discord modules
+const UserProfileScreen = find(m => m?.type?.render?.name === "UserProfileHeader");
+const ChannelStore = find(m => m.getChannel && m.getChannels);
+const MessageStore = find(m => m.getMessages && m.getMessage);
+const GuildStore = find(m => m.getGuild && m.getGuilds);
 
-let unpatch = null;
-const DISCORD_EPOCH = 1420070400000n;
-
-function getLastMessageDate(userId, channelId) {
-    if (!MessageStore || !channelId) return "Unknown (No channel context)";
-
-    const collection = MessageStore.getMessages(channelId);
-    if (!collection) return "Unknown (No messages loaded)";
-
-    const messages = collection._array ?? collection.toArray?.() ?? [];
-    if (messages.length === 0) return "Unknown (Empty channel)";
-
-    const lastMsg = messages
-        .slice()
-        .reverse()
-        .find(m => m.author?.id === userId || m.authorId === userId);
-
-    if (!lastMsg) return "No recent messages found";
-
-    let ts;
-    if (lastMsg.timestamp) {
-        ts = new Date(lastMsg.timestamp).getTime();
-    } else {
-        const snowflake = BigInt(lastMsg.id);
-        ts = Number((snowflake >> 22n) + DISCORD_EPOCH);
-    }
-
-    return new Date(ts).toLocaleDateString("en-GB", {
-        day: "2-digit",
-        month: "2-digit",
-        year: "numeric",
-    });
-}
+let patches = [];
 
 export default {
-    onLoad() {
-        // ENHANCEMENT 1: Precision targeting. 
-        // Discord updates often, so we look for specific Profile component names.
-        let ProfileModule = findByName("UserProfile", false) 
-            || findByName("UserProfilePopout", false) 
-            || find(m => m?.default?.name === "UserProfile" || m?.type?.name === "UserProfile");
+  onLoad: () => {
+    // Patch the profile render to add our row
+    patches.push(
+      before("render", UserProfileScreen.type, (args) => {
+        const props = args[0];
+        const userId = props.userId; // User ID from profile
+        const guildId = props.guildId; // Current guild ID
 
-        if (!ProfileModule) {
-            console.warn("[LastMessageInChannel] ❌ Failed to find UserProfile component.");
-            return;
-        }
+        if (!userId || !guildId) return; // Not in a guild context
 
-        const patchTarget = ProfileModule.default ? ProfileModule : { default: ProfileModule };
+        // Find the latest message from this user in the guild
+        const lastMessage = getLatestUserMessageInGuild(userId, guildId);
+        if (!lastMessage) return;
 
-        unpatch = after("default", patchTarget, ([props], returnValue) => {
-            try {
-                // Ensure we actually have a user to look up
-                const user = props?.user;
-                if (!user?.id) return returnValue;
+        // Store the timestamp to be used in the injected component
+        props.__lastMessageTimestamp = lastMessage.timestamp;
+      })
+    );
 
-                const channelId = SelectedChannelStore?.getChannelId?.();
-                const date = getLastMessageDate(user.id, channelId);
+    // Inject our row into the profile's info section
+    patches.push(
+      after("render", UserProfileScreen.type, (_, ret) => {
+        const props = ret.props;
+        if (!props.__lastMessageTimestamp) return ret;
 
-                const testText = React.createElement(FormText, {
-                    style: {
-                        color: "#ffffff",
-                        fontSize: 15,
-                        fontWeight: "bold",
-                        padding: 12,
-                        marginTop: 10,
-                        textAlign: "center",
-                        backgroundColor: "#ff000090", // Softer red for visibility
-                        borderRadius: 8,
-                        borderWidth: 1,
-                        borderColor: "#ff0000",
-                    },
-                    numberOfLines: 1,
-                }, `🧪 Last Message: ${date}`);
+        // Find the section where we want to insert our row
+        const infoSection = findInTree(ret, (n) => n?.type?.name === "UserProfileInfo");
+        if (!infoSection) return ret;
 
-                // ENHANCEMENT 2: Safe UI Injection.
-                // React children can be an array, an object, or undefined. This handles all three safely.
-                if (returnValue && returnValue.props) {
-                    const currentChildren = returnValue.props.children;
-                    
-                    if (Array.isArray(currentChildren)) {
-                        currentChildren.push(testText);
-                    } else if (currentChildren) {
-                        returnValue.props.children = [currentChildren, testText];
-                    } else {
-                        returnValue.props.children = testText;
-                    }
-                }
+        // Append our row
+        infoSection.props.children.push(
+          React.createElement(FormRow, {
+            label: "Last Message",
+            subLabel: formatTimestamp(props.__lastMessageTimestamp),
+            icon: getAssetIDByName("ic_message_24px"),
+          })
+        );
 
-                return returnValue;
-            } catch (err) {
-                // ENHANCEMENT 3: Graceful failure. 
-                // Prevents Discord from crashing if the layout unexpectedly changes.
-                console.error("[LastMessageInChannel] ❌ Patch error:", err);
-                return returnValue; 
-            }
-        });
-    },
-
-    onUnload() {
-        if (unpatch) unpatch();
-        unpatch = null;
-    }
+        return ret;
+      })
+    );
+  },
+  onUnload: () => {
+    patches.forEach(p => p());
+  },
 };
-             
+
+// Helper: Find the latest message from a user in a guild
+function getLatestUserMessageInGuild(userId, guildId) {
+  const guild = GuildStore.getGuild(guildId);
+  if (!guild) return null;
+
+  let latest = null;
+
+  // Iterate over all channels in the guild
+  for (const channel of Object.values(guild.channels)) {
+    const messages = MessageStore.getMessages(channel.id);
+    if (!messages) continue;
+
+    for (const message of messages) {
+      if (message.author.id === userId) {
+        const ts = new Date(message.timestamp);
+        if (!latest || ts > new Date(latest.timestamp)) {
+          latest = message;
+        }
+      }
+    }
+  }
+
+  return latest;
+}
+
+// Helper: Format timestamp nicely
+function formatTimestamp(timestamp) {
+  const date = new Date(timestamp);
+  const now = new Date();
+  const diffMs = now - date;
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+
+  if (diffMins < 60) return `${diffMins} minute${diffMins !== 1 ? 's' : ''} ago`;
+  if (diffHours < 24) return `${diffHours} hour${diffHours !== 1 ? 's' : ''} ago`;
+  if (diffDays < 7) return `${diffDays} day${diffDays !== 1 ? 's' : ''} ago`;
+  return date.toLocaleDateString();
+}
+
+// Utility: Recursively search a React tree for a node matching a predicate
+function findInTree(tree, filter) {
+  if (!tree) return null;
+  if (filter(tree)) return tree;
+
+  if (Array.isArray(tree)) {
+    for (const item of tree) {
+      const found = findInTree(item, filter);
+      if (found) return found;
+    }
+  } else if (tree.props && tree.props.children) {
+    const found = findInTree(tree.props.children, filter);
+    if (found) return found;
+  }
+
+  return null;
+            }
