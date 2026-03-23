@@ -1,188 +1,90 @@
-import { find, findByProps } from "@vendetta/metro";
-import { React } from "@vendetta/metro/common";
-import { before, after } from "@vendetta/patcher";
-import { getAssetIDByName } from "@vendetta/ui/assets";
-import { Forms } from "@vendetta/ui/components";
+import { findByName, findByStoreName, findByProps } from "@vendetta/metro";
+import { after, unpatchAll } from "@vendetta/patcher";
 
-const { FormRow } = Forms;
+const SelectedChannelStore = findByStoreName("SelectedChannelStore");
+const ChannelStore = findByStoreName("ChannelStore");
+const RestAPI = findByProps("get", "post", "put");
+const BioText = findByName("BioText", false);
 
-// Stores
-const ChannelStore = findByProps("getChannel", "getChannels");
-const MessageStore = findByProps("getMessages", "getMessage");
-const GuildStore = findByProps("getGuild", "getGuilds");
+const cache: Record<string, string | null> = {};
+const pending = new Set<string>();
 
-// Attempt to find the user profile component
-let UserProfileComponent;
-
-// Strategy 1: Look for components with typical profile names
-const possibleNames = [
-    "UserProfile",
-    "UserProfileScreen",
-    "UserProfileHeader",
-    "UserProfileModal",
-    "ProfilePanel"
-];
-
-for (const name of possibleNames) {
-    UserProfileComponent = find(m => m?.name === name || m?.displayName === name);
-    if (UserProfileComponent) break;
+// Try every possible way to get channelId
+function getChannelId(): string | null {
+  return (
+    SelectedChannelStore?.getChannelId?.() ??
+    SelectedChannelStore?.getCurrentlySelectedChannelId?.() ??
+    SelectedChannelStore?.getLastSelectedChannelId?.() ??
+    null
+  );
 }
 
-// Strategy 2: Look for a component that has a userId prop in defaultProps
-if (!UserProfileComponent) {
-    UserProfileComponent = find(m => m?.defaultProps?.userId !== undefined);
+function formatDate(timestamp: string): string {
+  const date = new Date(timestamp);
+  const days = Math.floor((Date.now() - date.getTime()) / 86400000);
+  const readable = date.toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+  if (days === 0) return `${readable} (Today)`;
+  if (days === 1) return `${readable} (Yesterday)`;
+  return `${readable} (${days} days ago)`;
 }
 
-// Strategy 3: Look for a component that takes userId as a prop in its render
-if (!UserProfileComponent) {
-    UserProfileComponent = find(m => {
-        if (!m?.render) return false;
-        // Check if the render function's source contains 'userId' (crude but sometimes works)
-        const renderStr = m.render.toString();
-        return renderStr.includes('userId') && renderStr.includes('guildId');
-    });
-}
+after("default", BioText, ([props], res) => {
+  if (!res?.props || !props.userId) return res;
 
-// If still not found, log a warning
-if (!UserProfileComponent) {
-    console.warn("[UserDetails] Could not find UserProfile component. Plugin will not work.");
-} else {
-    console.log("[UserDetails] Found profile component:", UserProfileComponent.name || UserProfileComponent.displayName);
-}
+  const userId: string = props.userId;
+  
+  // Also try guildId from props directly
+  const channelId = getChannelId();
+  const channel = channelId ? ChannelStore?.getChannel?.(channelId) : null;
+  const guildId: string | null = channel?.guild_id ?? null;
 
-let patches = [];
+  if (!channelId) return res;
 
-export default {
-    onLoad: () => {
-        if (!UserProfileComponent) {
-            console.log("[UserDetails] No profile component found, skipping patches.");
-            return;
-        }
+  const key = `${userId}:${channelId}`;
 
-        // Patch before render to capture userId and guildId and find last message
-        patches.push(
-            before("render", UserProfileComponent, (args) => {
-                try {
-                    const props = args[0];
-                    const userId = props?.userId;
-                    const guildId = props?.guildId;
+  if (!(key in cache)) {
+    if (!pending.has(key)) {
+      pending.add(key);
 
-                    if (!userId || !guildId) return;
+      const url = guildId
+        ? `/guilds/${guildId}/messages/search?author_id=${userId}&channel_id=${channelId}&limit=1`
+        : `/channels/${channelId}/messages/search?author_id=${userId}&limit=1`;
 
-                    const lastMessage = getLatestUserMessageInGuild(userId, guildId);
-                    if (lastMessage) {
-                        props.__lastMessageTimestamp = lastMessage.timestamp;
-                        console.log(`[UserDetails] Found last message for user ${userId} at ${lastMessage.timestamp}`);
-                    }
-                } catch (e) {
-                    console.error("[UserDetails] Error in before patch:", e);
-                }
-            })
-        );
-
-        // Patch after render to inject the row
-        patches.push(
-            after("render", UserProfileComponent, (_, ret) => {
-                try {
-                    const props = ret?.props;
-                    if (!props?.__lastMessageTimestamp) return ret;
-
-                    // Find the info section where we can insert our row
-                    const infoSection = findInTree(ret, n => 
-                        n?.type?.name === "UserProfileInfo" || 
-                        n?.type?.displayName === "UserProfileInfo" ||
-                        (n?.type?.toString && n.type.toString().includes("UserProfileInfo"))
-                    );
-
-                    if (!infoSection || !infoSection.props?.children) {
-                        console.log("[UserDetails] Could not find UserProfileInfo section");
-                        return ret;
-                    }
-
-                    // Insert the row
-                    infoSection.props.children.push(
-                        React.createElement(FormRow, {
-                            label: "Last Message",
-                            subLabel: formatTimestamp(props.__lastMessageTimestamp),
-                            icon: getAssetIDByName("ic_message_24px"),
-                        })
-                    );
-
-                    console.log("[UserDetails] Injected last message row");
-                } catch (e) {
-                    console.error("[UserDetails] Error in after patch:", e);
-                }
-                return ret;
-            })
-        );
-
-        console.log("[UserDetails] Plugin loaded successfully.");
-    },
-    onUnload: () => {
-        patches.forEach(p => p());
-        patches = [];
-        console.log("[UserDetails] Plugin unloaded.");
-    },
-};
-
-// Helper: Find latest message from user in guild
-function getLatestUserMessageInGuild(userId, guildId) {
-    if (!GuildStore || !MessageStore || !ChannelStore) return null;
-
-    const guild = GuildStore.getGuild(guildId);
-    if (!guild) return null;
-
-    let latest = null;
-    const channels = Object.values(guild.channels || {});
-
-    for (const channel of channels) {
-        const messages = MessageStore.getMessages(channel.id);
-        // messages might be a collection, convert to array
-        const messagesArray = messages?.toArray?.() || [];
-        for (const msg of messagesArray) {
-            if (msg.author?.id === userId) {
-                const ts = new Date(msg.timestamp);
-                if (!latest || ts > new Date(latest.timestamp)) {
-                    latest = msg;
-                }
-            }
-        }
+      RestAPI.get({ url })
+        .then((r: any) => {
+          const msgs = r?.body?.messages;
+          const lastMsg = Array.isArray(msgs) && msgs.length > 0 ? msgs[0][0] : null;
+          cache[key] = lastMsg ? formatDate(lastMsg.timestamp) : null;
+          pending.delete(key);
+        })
+        .catch(() => {
+          // Don't cache on error so it retries next open
+          pending.delete(key);
+        });
     }
-    return latest;
-}
+    return res;
+  }
 
-// Format timestamp
-function formatTimestamp(timestamp) {
-    const date = new Date(timestamp);
-    const now = new Date();
-    const diffMs = now - date;
-    const diffMins = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMs / 3600000);
-    const diffDays = Math.floor(diffMs / 86400000);
+  if (!cache[key]) return res;
 
-    if (diffMins < 60) return `${diffMins} minute${diffMins !== 1 ? 's' : ''} ago`;
-    if (diffHours < 24) return `${diffHours} hour${diffHours !== 1 ? 's' : ''} ago`;
-    if (diffDays < 7) return `${diffDays} day${diffDays !== 1 ? 's' : ''} ago`;
-    return date.toLocaleDateString();
-}
+  const extraLine = `\n\nLast message here: ${cache[key]}`;
+  const children = res.props.children;
 
-// Recursively find a node in React tree
-function findInTree(tree, filter) {
-    if (!tree) return null;
-    if (filter(tree)) return tree;
+  if (typeof children === "string") {
+    if (!children.includes("Last message here:"))
+      res.props.children += extraLine;
+  } else if (Array.isArray(children)) {
+    if (!children.join("").includes("Last message here:"))
+      children.push(extraLine);
+  } else {
+    res.props.children = [children, extraLine];
+  }
 
-    if (Array.isArray(tree)) {
-        for (const item of tree) {
-            const found = findInTree(item, filter);
-            if (found) return found;
-        }
-    } else if (tree?.props?.children) {
-        const found = findInTree(tree.props.children, filter);
-        if (found) return found;
-    } else if (tree?.children) {
-        const found = findInTree(tree.children, filter);
-        if (found) return found;
-    }
+  return res;
+});
 
-    return null;
-                      }
+export const onUnload = () => unpatchAll();
